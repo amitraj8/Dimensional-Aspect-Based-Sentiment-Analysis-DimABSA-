@@ -1,0 +1,839 @@
+\documentclass{article}
+\usepackage{graphicx}
+\usepackage{float} 
+\usepackage{multirow}
+\usepackage{pdfpages}
+\usepackage{url}
+\usepackage{newtxtext,newtxmath}
+\usepackage[a4paper, margin=1in]{geometry}
+\usepackage[colorlinks=true,
+            linkcolor=blue,
+            citecolor=blue,
+            urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\hypersetup{pageanchor=false} 
+\includepdf[
+    pages=1,
+    fitpaper=true,
+    pagecommand={},
+    linktodoc=true
+]{Title page.pdf}
+\clearpage
+\hypersetup{pageanchor=true} 
+
+\section*{Abstract}
+\addcontentsline{toc}{section}{Abstract}
+
+\large
+
+Traditional sentiment analysis often classifies user reviews into simple, rigid categories such as positive, negative, or neutral. However, human emotions are inherently complex and nuanced. To better capture this depth, this thesis explores Dimensional Aspect-Based Sentiment Analysis (DimABSA) in the context of the SemEval-2026 Task 3. The primary objective is to extract specific product features (aspects), their broad categories, the expressed opinions, and precisely map their emotional intensity onto a continuous two-dimensional scale: Valence (positivity) and Arousal (intensity).
+This thesis investigates all three subtasks of the SemEval-2026 DimABSA shared task, including dimensional sentiment regression, triplet extraction, and quadruplet extraction. Different transformer-based and Large Language Model (LLM)-based approaches were explored to address the challenges associated with continuous sentiment prediction and structured sentiment extraction.
+
+For Subtask 1, multiple pretrained transformer encoder models, including BERT, RoBERTa, and DeBERTa variants, were evaluated for VA regression. Experimental results demonstrated that RoBERTa-large achieved the best performance across both restaurant and laptop domains, obtaining top leaderboard rankings in the official competition.
+
+For Subtask 2, both an end-to-end Llama-based generative framework and a hybrid Llama + RoBERTa architecture were investigated for dimensional triplet extraction. Comparative experiments showed that the fully generative approach slightly outperformed the hybrid framework, highlighting the importance of preserving contextual dependencies during joint extraction and sentiment prediction.
+
+For Subtask 3, instruction-tuned LLMs were employed for dimensional quadruplet extraction. Several experiments were carried out to study how prompt design and training settings affect model performance. Among all tested configurations, the model trained with optimized hyperparameters produced the strongest results and secured 7th position on the official SemEval-2026 leaderboard for the laptop domain.
+
+Overall, the findings demonstrate that transformer-based regression models and instruction-tuned LLMs provide effective solutions for Dimensional Aspect-Based Sentiment Analysis. The experiments further highlight the importance of prompt design, hyperparameter optimization, and parameter-efficient fine-tuning techniques for improving structured sentiment extraction performance.
+\normalsize
+\clearpage
+\newpage
+\tableofcontents
+\newpage
+\section{Introduction}
+\label{sec:introduction}
+
+With the rapid growth of e-commerce platforms and digital communication, analysing user opinions has become increasingly important for improving products and enhancing customer experience. Conventional sentiment analysis methods generally classify text into fixed categories such as \textit{positive}, \textit{negative}, or \textit{neutral} at the sentence or document level. However, human emotions are inherently complex and multifaceted. Aspect-Based Sentiment Analysis (ABSA) emerged to address this by identifying specific entities or features (aspects) mentioned in text and determining the sentiment directed toward each one \cite{pontiki2014semeval}. 
+
+While traditional ABSA provides more granular insights, its reliance on categorical sentiment labels still limits its ability to capture the true intensity and nuance of human emotion. To overcome this limitation, recent research has shifted toward Dimensional Aspect-Based Sentiment Analysis (DimABSA). Grounded in psychology, particularly Russell's Circumplex Model of Affect \cite{russell1980circumplex}, dimensional sentiment maps emotions onto a continuous two-dimensional space: \textit{Valence} (ranging from extremely negative/unpleasant to extremely positive/pleasant) and \textit{Arousal} (ranging from calm/sleepy to excited/active). 
+
+% NEW: Changed [htbp] to [H] to lock the image in place
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{VA.png} 
+    \caption{Two-dimensional space of Valence and Arousal.}
+    \label{fig:circumplex_model}
+\end{figure}
+
+This thesis focuses on advancing the state-of-the-art in DimABSA by participating in the SemEval-2026 DimABSA shared task (Track A: English). Three subtasks of increasing complexity are investigated: Subtask 1 (DimASR) predicts continuous Valence-Arousal scores for given aspect terms using fine-tuned transformer encoder models; Subtask 2 (DimASTE) jointly extracts aspect and opinion terms alongside their VA scores using generative Large Language Models; and Subtask 3 (DimASQP) extends this further by additionally predicting aspect categories, requiring full quadruplet extraction from raw text. Across all three subtasks, the work explores both transformer-based architectures such as RoBERTa-large and instruction-tuned LLMs such as Llama-3.1-8B, optimised via Parameter-Efficient Fine-Tuning (PEFT) techniques including Low-Rank Adaptation (LoRA).
+
+This thesis details the complete methodology and final experimental results achieved during the SemEval-2026 shared task. The research establishes a robust data processing pipeline and successfully evaluates transformer-based regression for Subtask 1. Building upon these results, this work also successfully tackles the more complex generative challenges of Subtask 2 (Category extraction) and the end-to-end quadruplet extraction required for Subtask 3.
+
+\section{Problem Statement}
+\label{sec:problem}
+
+Dimensional Aspect-Based Sentiment Analysis (DimABSA) extends traditional Aspect-Based Sentiment Analysis (ABSA) by modelling sentiment as continuous values in the Valence–Arousal (VA) space rather than discrete polarity labels. The main goal of the SemEval 2026 DimABSA shared task is to teach computers how to truly understand the deep, complex emotions people share in customer reviews. Instead of just making a simple guess if a review is happy or sad, the system needs to find the exact features people are talking about and score their feelings using a continuous number scale for Valence (positivity) and Arousal (intensity). This work focuses on three subtasks defined in the SemEval-2026 shared task, each increasing in complexity from regression to structured information extraction.
+
+\subsection{Subtask 1: Dimensional Aspect Sentiment Regression (DimASR)}
+
+In this first step, the system is given a sentence and the specific aspect terms (the exact features) mentioned in it. The goal is for the model to figure out the exact Valence and Arousal (V-A) scores for each aspect. Unlike traditional sentiment classification, where polarity is assigned categorically, this task requires modelling fine-grained emotional intensity.
+
+\textbf{Input:}
+\begin{verbatim}
+{
+  "ID": "R001",
+  "Text": "average to good thai food, but terrible delivery.",
+  "Aspect": ["thai food", "delivery"]
+}
+\end{verbatim}
+
+\textbf{Output:}
+\begin{verbatim}
+{
+  "ID": "R001",
+  "Aspect_VA": [
+    {
+      "Aspect": "thai food",
+      "VA": "6.75#6.38"
+    },
+    {
+      "Aspect": "delivery",
+      "VA": "2.88#6.62"
+    }
+  ]
+}
+\end{verbatim}
+
+\textbf{Challenges:}
+\begin{itemize}
+    \item Modelling sentiment as continuous values instead of discrete classes.
+    \item Capturing context-dependent sentiment for multiple aspects within a single sentence.
+    \item Learning the relationship between valence (polarity) and arousal (intensity).
+    \item Handling domain-specific variations in expression (e.g., restaurant vs hotel reviews).
+\end{itemize}
+
+This subtask forms the core of the completed work in this thesis, where transformer-based regression models are employed to predict VA scores.
+
+---
+
+\subsection{Subtask 2: Dimensional Aspect Sentiment Triplet Extraction (DimASTE)}
+
+Sometimes people do not mention a feature by name, but they talk about a general category instead. Subtask 2 extends the regression task by requiring the joint extraction of aspect terms, opinion terms, and their associated VA scores. The system must identify both the target (aspect) and the sentiment expression (opinion) directly from raw text.
+
+\textbf{Input:}
+\begin{verbatim}
+{
+  "ID": "R002",
+  "Text": "The food was amazing but the service was slow."
+}
+\end{verbatim}
+
+\textbf{Output:}
+\begin{verbatim}
+{
+  "ID": "R002",
+  "Triplet": [
+    {
+      "Aspect": "food",
+      "Opinion": "amazing",
+      "VA": "8.20#7.50"
+    },
+    {
+      "Aspect": "service",
+      "Opinion": "slow",
+      "VA": "3.10#4.80"
+    }
+  ]
+}
+\end{verbatim}
+
+\textbf{Challenges:}
+\begin{itemize}
+    \item Joint extraction of aspect and opinion spans from unstructured text.
+    \item Ensuring correct alignment between aspects and their corresponding opinions.
+    \item Generating structured outputs with strict formatting requirements.
+    \item Simultaneously performing extraction and continuous regression.
+\end{itemize}
+
+This subtask is a core component of this thesis, where large language models and hybrid LLM-encoder pipelines are explored for structured generation.
+
+\subsection{Subtask 3: Dimensional Aspect Sentiment Quadruplet Extraction (DimASQP)}
+
+This is the final and hardest part of the project. The system is only given the raw text. It has to do all the heavy lifting on its own: find the aspect terms, map them to the right categories, pick out the exact opinion words, and finally, score the Valence and Arousal. 
+
+\textbf{Input:}
+\begin{verbatim}
+{
+  "ID": "R003",
+  "Text": "The food quality was excellent but the service was disappointing."
+}
+\end{verbatim}
+
+\textbf{Output:}
+\begin{verbatim}
+{
+  "ID": "R003",
+  "Quadruplet": [
+    {
+      "Aspect": "food quality",
+      "Category": "FOOD#QUALITY",
+      "Opinion": "excellent",
+      "VA": "8.50#7.20"
+    },
+    {
+      "Aspect": "service",
+      "Category": "SERVICE#GENERAL",
+      "Opinion": "disappointing",
+      "VA": "2.70#5.60"
+    }
+  ]
+}
+\end{verbatim}
+
+\textbf{Challenges:}
+\begin{itemize}
+    \item Incorporating domain-specific aspect categories with long-tail distributions.
+    \item Increasing task complexity due to multi-component structured prediction.
+    \item Maintaining consistency across extracted aspect, opinion, and category.
+    \item Handling ambiguity in category assignment.
+\end{itemize}
+
+This subtask represents the most complex formulation and serves as the final generative challenge explored in this thesis.
+
+
+\section{Literature Review}
+\label{sec:literature}
+
+\subsection{Aspect-Based Sentiment Analysis}
+
+To truly understand how far Aspect-Based Sentiment Analysis (ABSA) has come, it helps to look back at how researchers first started teaching computers to understand human feelings. In the beginning, sentiment analysis treated whole reviews as just one feeling—either completely good or completely bad. However, as user reviews grew more detailed, researchers realised this was not enough. A person might love a laptop's screen but hate its battery. To solve this, the research community introduced Aspect-Based Sentiment Analysis (ABSA) during the early SemEval competitions between 2014 and 2016 \cite{pontiki2014semeval, pontiki2015semeval, pontiki2016semeval}, which introduced benchmark datasets for domains such as restaurant and laptop reviews. These tasks defined core components of ABSA, including aspect terms, opinion terms, and sentiment polarity.
+
+Subsequent research extended ABSA from simple classification to structured prediction tasks. In particular, Aspect Sentiment Triplet Extraction (ASTE) and Aspect Sentiment Quadruplet Prediction (ASQP) were introduced to jointly extract aspect terms, opinion terms, and sentiment polarity, with ASQP further incorporating aspect category classification \cite{peng2020aste, xu2020position, cai2021asqp}.
+These early models were a huge step forward because they finally looked at specific features. Still, they forced human emotions into very rigid boxes: \textit{Positive}, \textit{Negative}, or \textit{Neutral}. While helpful, these simple labels missed the true depth of how people actually feel. As discussed in the SemEval-2026 task description and recent studies, ABSA has expanded considerably over the years and is now applied in a wide range of domains, including finance, healthcare, and social media analysis \cite{yu2026dimabsa, chebolu2023review, hua2024systematic, daniello2022knowmis}. However, the reliance on categorical sentiment labels restricts the ability of these systems to capture nuanced emotional expressions.
+
+\subsection{Dimensional Sentiment Analysis}
+
+Human emotions are rarely just black and white. Sometimes we are intensely angry, and other times we are just mildly annoyed. To overcome the limitations of categorical sentiment representation, dimensional sentiment analysis has been proposed as an alternative framework. Grounded in psychological theories such as Russell’s Circumplex Model of Affect, emotions are represented along continuous dimensions, primarily valence and arousal \cite{russell1980circumplex}. This representation allows for capturing both the polarity and intensity of sentiment.
+
+A number of datasets and lexical resources have been introduced to support research in dimensional sentiment analysis. Lexicon-based resources such as SentiWordNet \cite{baccianella2010sentiwordnet} and NRC-VAD \cite{mohammad2018nrcvad} assign affective information to individual words, while datasets like EmoBank provide dimensional emotion annotations at the sentence level \cite{buechel2017emobank}. According to the SemEval-2026 organisers, dimensional representations are useful for capturing subtle emotional differences that are difficult to express using only fixed sentiment categories \cite{yu2026dimabsa}.
+
+The integration of dimensional sentiment into ABSA has led to the formulation of Dimensional Aspect-Based Sentiment Analysis (DimABSA), which combines structured extraction with continuous regression. This paradigm shift represents a significant advancement in sentiment analysis research.
+
+\subsection{Transformer-Based Approaches}
+
+Recent advances in NLP have been driven by pretrained transformer models such as BERT \cite{devlin2019bert}, RoBERTa \cite{liu2019roberta}, and DeBERTa \cite{he2021deberta}. These models have demonstrated strong performance across a wide range of tasks, including sentiment analysis and ABSA.
+
+In the context of DimABSA, transformer-based encoders are commonly used for regression tasks. As reported in the SemEval-2026 shared task, many top-performing systems rely on fine-tuned transformer architectures to predict valence and arousal scores \cite{yu2026dimabsa}. Ensemble methods, combining multiple encoder models, further improve performance by reducing variance and increasing robustness.
+
+Our approach for Subtask 1 is based on transformer encoder models combined through a weighted ensemble strategy. Multiple models were experimented with during training, and combining their predictions helped improve the stability and overall accuracy of valence and arousal estimation. This was particularly useful because the task involves predicting two continuous emotional dimensions simultaneously.
+
+\subsection{Large Language Models for Structured Extraction}
+
+Although transformer encoder models perform well for regression problems, tasks such as triplet and quadruplet extraction require the model to generate structured outputs directly from raw text. Because of this, recent studies have increasingly explored instruction-tuned Large Language Models (LLMs), such as Llama \cite{touvron2023llama}, for structured sentiment extraction tasks.
+
+LLMs enable end-to-end generation of structured outputs, allowing models to simultaneously extract aspect terms, opinion terms, and sentiment scores. As discussed in recent system approaches, generative models can overcome limitations of pipeline-based methods, which often suffer from error propagation across stages.
+
+In particular, fine-tuning LLMs for structured prediction allows the model to learn the relationship between textual expressions and their corresponding sentiment intensities in a unified framework. This type of framework is particularly useful for tasks such as quadruplet extraction, where the model must generate both structured categorical information and continuous sentiment scores at the same time.
+
+\subsection{Challenges in DimABSA}
+
+Although DimABSA has gained increasing attention in recent years, it still presents several research challenges. According to the SemEval-2026 organisers, one of the main difficulties is combining structured extraction with continuous sentiment prediction within a single framework \cite{yu2026dimabsa}. The problem becomes even more challenging when working with multilingual and multi-domain datasets, where writing styles and sentiment expressions vary significantly across domains and languages.
+
+Another important challenge involves evaluation. Since the task contains both categorical outputs and continuous VA values, conventional ABSA metrics alone are not sufficient. To address this issue, the shared task introduced the continuous F1 (cF1) metric, which considers both extraction correctness and the quality of VA prediction. However, optimizing models for such hybrid evaluation metrics remains difficult in practice.
+
+In addition, valence and arousal are closely related emotional dimensions, meaning that models must learn not only accurate score prediction but also meaningful relationships between emotional intensity and polarity.
+
+\subsection{Synthesis and Research Gap}
+\label{subsec:synthesis}
+
+Overall, Previous ABSA research has achieved good results in identifying sentiment toward specific aspects, but many traditional approaches still rely on predefined sentiment categories such as positive, negative, and neutral. Because of this, they often struggle to capture subtle differences in emotional intensity and expression. DimABSA addresses this limitation by modelling sentiment within a continuous valence–arousal space. However, recent studies also show that current approaches face important architectural limitations. Transformer encoder models such as RoBERTa perform well for continuous regression tasks, but they are not naturally designed for structured text generation tasks such as triplet and quadruplet extraction. Conversely, while instruction-tuned LLMs excel at generating these structured textual outputs, they are severely limited by their instability in precise decimal regression. 
+
+These specific limitations directly motivate the methodology of this thesis. To address the regression bottleneck, this work leverages the proven mathematical stability of RoBERTa-large for Subtask 1. To address the structural generation gap, it utilizes parameter-efficient fine-tuning (LoRA) on Llama-3.1-8B for Subtask 3. Finally, to bridge the gap between these two paradigms, this research proposes a novel hybrid architecture (LLM-encoder) for Subtask 2, deliberately combining the textual reasoning of Llama with the regression accuracy of RoBERTa. By critically evaluating both generative and hybrid pipelines, this thesis provides a direct, empirically driven response to the current architectural limitations in dimensional sentiment analysis.
+
+\section{Datasets}
+\label{sec:datasets}
+
+This work utilises the datasets provided as part of the SemEval-2026 Task 3 on Dimensional Aspect-Based Sentiment Analysis (DimABSA). The datasets are designed to support both regression and structured extraction tasks across multiple languages and domains. In this thesis, experiments are conducted on the \textbf{English language datasets}, specifically focusing on the \textbf{restaurant} and \textbf{laptop} domains.
+
+\subsection{Dataset Overview}
+
+The DimABSA dataset is a multilingual and multi-domain benchmark designed for dimensional sentiment analysis. Unlike traditional ABSA datasets that rely only on categorical sentiment labels, this dataset also includes continuous valence–arousal (VA) annotations to capture emotional intensity and polarity in a more detailed manner. Each instance is annotated with different levels of granularity depending on the subtask, including aspect terms, opinion terms, aspect categories, and VA scores \cite{lee2026dimabsabuildingmultilingualmultidomain}.
+
+As reported in the organisers' paper, Track A datasets span multiple domains such as restaurant, laptop, hotel, and finance, and include annotations for up to four components: Aspect (A), Category (C), Opinion (O), and Valence–Arousal (VA). The VA scores are continuous values ranging from 1 to 9, where 1 represents extreme negativity or low arousal, and 9 represents extreme positivity or high arousal.
+
+\subsection{Domains Used in This Work}
+
+The experiments in this thesis were mainly carried out using the restaurant and laptop datasets provided in the SemEval-2026 shared task.
+
+\textbf{Restaurant Domain:}  
+The restaurant dataset contains customer reviews discussing different aspects of dining experiences, including food quality, service, ambience, and pricing. One of the challenging properties of this domain is that a single sentence may contain both positive and negative opinions about different aspects at the same time.
+
+\textbf{Laptop Domain:}  
+The laptop dataset consists of product reviews related to hardware and software features such as battery performance, display quality, keyboard usability, and overall system performance. Compared to restaurant reviews, the language used in this domain is generally more technical and feature-oriented, which makes sentiment extraction more difficult.
+
+\subsection{Data Characteristics}
+
+The datasets used in this work contain several characteristics that increase the complexity of dimensional sentiment analysis:
+
+\begin{itemize}
+    \item \textbf{Multiple Aspects in a Single Sentence:} A review sentence may mention several aspects together with different opinions and emotional intensities.
+    
+    \item \textbf{Continuous Emotion Representation:} Instead of fixed sentiment categories, the datasets use continuous valence–arousal scores to represent emotions.
+    
+    \item \textbf{Variation Across Domains:} Different domains contain different writing styles, vocabulary, and sentiment patterns.
+    
+    \item \textbf{Structured Annotation Format:} The higher subtasks require simultaneous prediction of multiple elements such as aspects, categories, opinions, and VA scores.
+\end{itemize}
+
+As described in the organisers' paper, the DimABSA dataset contains a large number of annotated aspect-level sentiment instances collected from multiple domains and languages. Together with related resources such as the DimStance dataset, it provides a broad benchmark for research in dimensional sentiment analysis \cite{lee2026dimabsabuildingmultilingualmultidomain}.
+
+\subsection{Annotation Process}
+
+The dataset annotation follows a two-stage process. First, categorical elements such as aspect terms, opinion terms, and aspect categories are identified. Subsequently, valence and arousal scores are assigned by multiple annotators, and the final score is obtained by averaging their ratings. This process ensures both structural consistency and reliable sentiment estimation \cite{lee2026dimabsabuildingmultilingualmultidomain}.
+
+\subsection{Data Analysis: Valence and Arousal Score Distributions}
+\label{subsec:data_analysis}
+
+A critical factor influencing model performance in Dimensional Aspect-Based Sentiment Analysis is the inherent distributional difference between valence and arousal scores within the training data. Typically, valence exhibits a broader, often bimodal distribution, as user reviews naturally cluster around clear positive or negative sentiments. In contrast, arousal scores tend to be unimodal and heavily concentrated around a moderate baseline. This occurs because while customers frequently express clear approval or disapproval (valence), they rarely use language indicating extreme excitement or absolute calmness (arousal) unless the experience was highly unusual.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{Data Analysis.png}
+    \caption{Distribution of Valence and Arousal scores in the training dataset. Valence shows a wider spread of extreme positive and negative feelings, while Arousal is heavily concentrated near the neutral center, making it a more difficult regression target.}
+    \label{fig:va_distribution}
+\end{figure}
+
+This distributional skew presents a significant computational challenge for regression architectures. Because arousal scores possess lower statistical variance and lack the explicit vocabulary cues associated with valence (e.g., "terrible" vs. "amazing"), the model receives a much weaker predictive signal during training. This fundamental difference in the underlying data directly contextualizes the performance gap observed in the Subtask 1 results (Section 6.1), where the Pearson Correlation Coefficient (PCC) for valence prediction (0.87) was significantly higher than for arousal prediction (0.57). Ultimately, the narrower, more concentrated nature of arousal makes it a substantially more difficult regression target for transformer-based models.
+
+\section{Methodology}
+\label{sec:methodology}
+
+This section presents the methodologies adopted for all three subtasks of the SemEval-2026 Dimensional Aspect-Based Sentiment Analysis (DimABSA) shared task. The methods used in this work combine transformer encoder models and instruction-tuned Large Language Models (LLMs) to handle both sentiment regression and structured extraction tasks. Different pretrained transformer architectures, such as BERT, RoBERTa, and DeBERTa, were tested for predicting continuous valence and arousal scores. For the extraction-based subtasks, instruction-tuned LLMs including Llama, Qwen, and DeepSeek-R1 were explored to generate sentiment triplets and quadruplets directly from text. The following sections describe the overall methodology, model design, and training process used for each subtask.
+
+\subsection{Subtask 1: Dimensional Aspect Sentiment Regression}
+
+Subtask 1 focuses on predicting continuous valence and arousal values for a given aspect term within a sentence. Since the task requires understanding contextual relationships between aspects and opinion expressions, transformer encoder models were used because of their strong contextual learning capability.
+
+\subsubsection{Model Architecture}
+
+The regression framework is built on top of pretrained transformer encoders. For each sample, the review sentence and its corresponding aspect term are combined into a single input sequence before being passed into the encoder model. The contextual embedding generated by the encoder is then forwarded to a regression layer that predicts the final valence and arousal values.
+
+Formally, for an input sequence $x$, the encoder generates a contextual representation $h$. The final prediction is computed using:
+
+\begin{equation}
+\hat{y} = W h + b
+\end{equation}
+
+where $\hat{y} = (V, A)$ denotes the predicted valence and arousal scores, while $W$ and $b$ represent trainable parameters of the regression layer.
+
+\subsubsection{Model Exploration and Selection}
+
+Several transformer-based models were tested during experimentation, including different variants of BERT, RoBERTa, and DeBERTa. Each model was fine-tuned separately on the official dataset and evaluated on the validation split.
+
+Among all tested models, \textbf{RoBERTa-large} consistently produced the best results on both the restaurant and laptop datasets. It performed better at capturing contextual sentiment information and generated more stable valence–arousal predictions compared to the other architectures. Based on these results, RoBERTa-large was selected as the final model for Subtask 1.
+
+\subsubsection{Training Strategy}
+
+The selected models were fine-tuned using supervised learning on the official training data. The overall training pipeline included:
+
+\begin{itemize}
+    \item Tokenizing the review text using the corresponding pretrained tokenizer,
+    \item Creating aspect-aware input sequences,
+    \item Fine-tuning the model using regression loss,
+    \item Monitoring validation performance during training.
+\end{itemize}
+
+The model jointly predicts valence and arousal scores, allowing it to learn both sentiment polarity and emotional intensity at the same time.
+
+\subsubsection{Evaluation Metric}
+
+Subtask 1 is evaluated as a regression task using the official \textbf{Root Mean Square Error (RMSE)} metric in the valence–arousal space. The evaluation compares the predicted VA values against the gold annotations provided in the dataset.
+
+\begin{equation}
+RMSE_{VA} =
+\sqrt{
+\frac{
+\sum_{i=1}^{N}
+\left[
+\left(V_p^{(i)} - V_g^{(i)}\right)^2
++
+\left(A_p^{(i)} - A_g^{(i)}\right)^2
+\right]
+}{N}
+}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $N$ is the total number of instances,
+    \item $V_p^{(i)}$ and $A_p^{(i)}$ denote predicted valence and arousal scores,
+    \item $V_g^{(i)}$ and $A_g^{(i)}$ denote the corresponding gold values.
+\end{itemize}
+
+Lower RMSE values indicate better prediction quality because the predicted emotional scores are closer to the ground-truth annotations.
+
+In addition, all predicted VA values are restricted to the official range of $[1, 9]$ and rounded to two decimal places according to the shared task requirements.
+
+\subsection{Subtask 2: Dimensional Aspect Sentiment Triplet Extraction (DimASTE)}
+\label{subsec:subtask2_method}
+
+Subtask 2 was treated as a structured extraction task where the goal was to identify sentiment triplets in the form of \textit{(Aspect, Opinion, VA)} directly from review text. To explore different modelling strategies, two separate approaches were investigated: an end-to-end LLM-based generation framework and a hybrid framework combining LLM extraction with transformer-based VA regression.
+
+\subsubsection{Dataset Preparation and Prompt Formulation}
+
+Experiments for this task were conducted using the English restaurant and laptop datasets released as part of the SemEval-2026 DimABSA shared task. The datasets were provided in JSON Lines format and processed separately for each domain. Each instance included the review text together with manually annotated aspect terms, opinion terms, and corresponding valence–arousal values.
+
+For instruction tuning, every training sample was converted into an instruction-response format so that the model could learn structured generation directly from text. A prompt template was designed to guide the model toward generating triplets in a fixed and consistent structure. The prompt also included formatting constraints and extraction instructions to reduce invalid outputs during inference. The exact prompt template utilized for this task was defined as follows:
+
+\begin{verbatim}
+Below is an instruction describing a task, paired with an input that provides 
+additional context. Your goal is to generate an output that correctly 
+completes the task.
+
+### Instruction:
+Given a textual instance [Text], extract all (A, O, VA) triplets, where:
+- A is an Aspect term (the entity being discussed)
+- O is an Opinion term (the feeling or sentiment expressed about A)
+- VA is a Valence-Arousal score in the format (valence#arousal)
+
+Valence: 1.00 (negative) to 9.00 (positive).
+Arousal: 1.00 (calm) to 9.00 (excited).
+Important: Aspect and Opinion must maintain the exact case and spelling 
+found in the [Text].
+
+### Example:
+Input:
+[Text] average to good thai food, but terrible delivery.
+
+Output:
+[Triplet] (thai food, average to good, 6.75#6.38), (delivery, terrible, 2.88#6.62)
+
+### Question:
+Now complete the following example:
+Input:
+{Review Text Inserted Here}
+\end{verbatim}
+
+\subsubsection{Experiment 1: End-to-End LLM-Based Triplet Extraction}
+
+In the first experiment, the entire triplet generation process was performed using the \textbf{Llama-3.1-8B-Instruct} model. The model was fine-tuned using the Unsloth framework with 4-bit quantization to reduce GPU memory requirements and enable efficient training.
+
+Parameter-Efficient Fine-Tuning (PEFT) was applied using the LoRA technique, which has proven highly effective for DimABSA extraction tasks in recent shared task evaluations \cite{chen2026pali}. LoRA adapters were injected into the attention projection layers, including the query, key, value, and output projection modules. 
+
+\paragraph{Training Loop Architecture}
+The training process was orchestrated using the \texttt{SFTTrainer} (Supervised Fine-Tuning Trainer) from the Hugging Face \texttt{trl} library. Because this was formulated as a causal language modeling task, the model was optimized using standard next-token prediction cross-entropy loss, strictly calculated only on the generated triplet output (the prompt tokens were masked during loss calculation). 
+
+To ensure stability while training an 8-billion parameter model on constrained hardware, the training loop utilized gradient checkpointing and mixed precision (\texttt{fp16}/\texttt{bf16}). Optimization was handled by an 8-bit AdamW optimizer (\texttt{adamw\_8bit}) paired with a linear learning rate scheduler. To prevent sequence length mismatch errors during batching, all input sequences were padded or truncated to a fixed maximum sequence length. 
+
+The model was trained separately for the laptop and restaurant domains. During inference, the model generated structured triplets directly from the input text. A regex-based post-processing step was then applied to extract valid triplets in the final target format:
+\begin{equation}
+(\text{Aspect}, \text{Opinion}, \text{VA})
+\end{equation}
+where VA is represented using the \texttt{V\#A} format. This approach treated the task as a fully generative extraction problem, allowing the model to jointly learn aspect extraction, opinion extraction, and continuous sentiment prediction within a single pass.
+
+\subsubsection{Experiment 2: Hybrid (LLM + RoBERTa) Approach}
+
+This subtask involves two major components: textual extraction and VA score generation, where VA prediction is fundamentally a regression task. During experimentation, it was observed that although Llama-based models perform well in extracting textual information such as aspect and opinion terms, they are comparatively less reliable for precise continuous regression tasks, particularly when generating decimal-valued VA scores. In contrast, RoBERTa models are widely recognised for their strong performance in regression-based tasks. Therefore, a hybrid architecture was explored to investigate whether combining the strong extraction capabilities of Llama with the robust regression performance of RoBERTa could improve the overall triplet extraction and VA prediction performance. Similar ensemble and hybrid techniques combining LLMs and RoBERTa have been successfully validated by top-performing systems in the shared task to balance generation and regression \cite{de2026quadai}.
+
+In this approach, the \textbf{Llama-3.1-8B-Instruct} model was utilized strictly for extracting the textual aspect and opinion terms. The continuous numerical VA scores were then predicted separately using a fine-tuned \textbf{RoBERTa-large} regression model.
+
+First, Llama generated structured aspect–opinion pairs from the input text using a simplified version of the unified prompt. These extracted terms were then concatenated into a cross-encoder format and passed to RoBERTa-large:
+\begin{equation}
+\text{Text} \; \text{\texttt{</s>}} \; \text{Aspect} \; \text{\texttt{</s>}} \; \text{Opinion}
+\end{equation}
+
+The RoBERTa-large model was trained as a multi-target regression model to jointly predict valence and arousal scores, outputting two continuous floating-point values corresponding to the exact VA dimensions.
+
+This hybrid framework effectively combined the strengths of both architectures:
+\begin{itemize}
+    \item \textbf{Llama-3.1-8B} provided strong generative and structured natural language extraction capabilities.
+    \item \textbf{RoBERTa-large} provided highly stable and mathematically accurate continuous regression performance.
+\end{itemize}
+
+\subsection{Subtask 3: Dimensional Aspect Sentiment Quadruplet Extraction (DimASQP)}
+
+Subtask 3 extends the DimABSA framework by requiring the extraction of complete sentiment quadruplets consisting of \textit{(Aspect, Category, Opinion, VA)} directly from raw text. Compared to the previous subtasks, this task is significantly more challenging because it combines structured information extraction, category classification, and continuous valence–arousal prediction within a unified framework. Due to time constraints and hardware limitations, all experiments for this subtask were conducted exclusively on the \textbf{English laptop domain} dataset provided in the SemEval-2026 shared task.
+
+\subsubsection{Dataset Preparation and Data Extraction}
+
+The dataset was provided in JSON Lines format, where each instance contains the review text and corresponding quadruplet annotations. Each quadruplet generated by the model contains four components: an aspect term, an aspect category, an opinion term, and the corresponding valence–arousal score written in the \texttt{V\#A} format.
+
+To prepare the data for instruction tuning, the original annotations were converted into structured text sequences. Every sample was represented as an instruction-response pair, where the input contained the review sentence and the target output contained the associated quadruplets.
+
+The preprocessing pipeline mainly involved:
+\begin{itemize}
+    \item Reading and parsing the JSONL dataset files,
+    \item Extracting aspect, category, opinion, and VA annotations,
+    \item Transforming the annotations into a unified text format,
+    \item Preparing instruction-based prompts for supervised fine-tuning.
+\end{itemize}
+
+By converting the problem into an instruction-following format, the task could be handled as a sequence generation problem using instruction-tuned LLMs.
+
+\subsubsection{Model Architecture}
+
+The experiments for Subtask 3 were performed using the \textbf{Llama-3.1-8B-Instruct} model. Since the experiments were conducted under limited GPU resources, the model was loaded in 4-bit precision using the Unsloth framework to reduce memory usage and speed up training.
+
+To make fine-tuning more efficient, Parameter-Efficient Fine-Tuning (PEFT) was applied through the LoRA (Low-Rank Adaptation) method. LoRA adapters were integrated into several transformer attention components, including the query, key, value, and output projection layers. This allowed the model to be fine-tuned efficiently while updating only a small number of trainable parameters.
+
+The training configuration also included techniques such as mixed precision training, gradient checkpointing, supervised fine-tuning, and instruction-based learning to improve training efficiency and reduce GPU memory usage.
+
+The main objective of the framework was to generate structured quadruplets directly from raw review text using an end-to-end generation approach.
+
+\subsubsection{Training Loop}
+
+The training process followed a supervised instruction-tuning setup. During training, each review sentence together with its target quadruplet sequence was tokenized and provided as input to the Llama model.
+
+The overall workflow consisted of the following steps:
+\begin{enumerate}
+    \item Tokenizing the instruction prompts and target outputs,
+    \item Preparing input IDs and attention masks,
+    \item Passing the tokenized inputs through the Llama model,
+    \item Computing sequence generation loss,
+    \item Updating trainable parameters using the AdamW optimizer.
+\end{enumerate}
+
+Training was performed for multiple epochs while periodically saving checkpoints and evaluating validation performance during fine-tuning. During inference, the generated outputs were cleaned and post-processed using regex-based parsing to extract valid quadruplets in the required format.
+
+\subsubsection{Experiment 1: Baseline Llama Quadruplet Extraction}
+
+The first experiment focused on direct quadruplet generation using a detailed instruction prompt. In this setup, the Llama-3.1-8B-Instruct model was fine-tuned to learn the mapping between review text and the corresponding structured quadruplet output.
+
+This experiment served as the baseline system for Subtask 3 and was designed to evaluate how effectively instruction-tuned LLMs can jointly perform extraction and VA prediction within a single generation framework. The baseline prompt included explicit instructions, step-by-step guidance, and few-shot examples to help the model produce more consistent outputs during training and inference.
+
+\begin{verbatim}
+You are an expert Linguist specializing in Aspect-Based Sentiment Analysis 
+(ABSA). Your task is to extract highly accurate (A, C, O, VA) quadruplets 
+from the given text.
+
+### Core Extraction Rules:
+1. Aspect (A): The specific feature or entity mentioned. Must match the 
+   input text casing exactly.
+2. Category (C): Classify the aspect using the "ENTITY#ATTRIBUTE" schema 
+   below. Use ONLY these labels. Must be UPPERCASE.
+3. Opinion (O): The specific word/phrase used to express the sentiment. 
+   Match the input casing exactly.
+4. Valence-Arousal (VA): 
+   - Valence: 1.00 (Extremely Negative) to 9.00 (Extremely Positive). 
+     5.00 is Neutral.
+   - Arousal: 1.00 (Calm/Sleepy) to 9.00 (Excited/Angry). 5.00 is Moderate.
+   - Format as "V.VV#A.AA" (always 2 decimal places).
+
+### Label Schema Constraints:
+- Valid Entities: {laptop_entity}
+- Valid Attributes: {laptop_attribute}
+
+### Step-by-Step Reasoning:
+Step 1: Identify all sentiment-bearing phrases and the aspects they refer to.
+Step 2: Map each aspect to the most relevant ENTITY and ATTRIBUTE.
+Step 3: Determine the numerical Valence and Arousal of the opinion.
+Step 4: Format as a list of (A, C, O, VA) quadruplets.
+
+### Examples:
+Input: [Text] The screen is incredibly bright and vibrant, but the price 
+is a bit steep.
+Output: [Quadruplet] (screen, DISPLAY#QUALITY, incredibly bright and vibrant, 
+8.50#7.20), (price, LAPTOP#PRICE, a bit steep, 3.20#5.50)
+
+### Target Task:
+Input:
+[Text] {input_text}
+Output:
+\end{verbatim}
+
+\subsubsection{Experiment 2: Prompt Change}
+
+While detailed prompts are generally helpful for LLMs, excessively long instructions can sometimes dilute the model's focus during fine-tuning, leading to hallucinated formatting or skipped categories. In the second experiment, the prompt structure was significantly condensed to improve output consistency and extraction quality. This strategy aligns with recent findings that structured, self-consistent generation prompts can significantly reduce hallucinated outputs in complex aspect extraction tasks \cite{hellwig2026nchellwig}. The modified prompt removed the conversational framing, the step-by-step reasoning, and the few-shot examples. Instead, it relied on a strict, minimalist set of formatting instructions. This zero-shot style prompt was designed to force the model to focus purely on the target rules:
+
+\begin{verbatim}
+Please analyze the laptop review below and extract all sentiment quadruplets 
+in the format (Aspect, Category, Opinion, Valence#Arousal).
+
+Rules:
+- Aspect: The exact words from the text representing the feature.
+- Category: Must be chosen from the allowed list (ENTITY#ATTRIBUTE).
+- Opinion: The exact words expressing the sentiment.
+- Valence#Arousal: Numbers from 1.00 to 9.00 formatted as V.VV#A.AA.
+
+Allowed Categories:
+Entities: {laptop_entity}
+Attributes: {laptop_attribute}
+
+Review:
+[Text] {input_text}
+
+Output:
+\end{verbatim}
+
+This experiment aimed to study the direct impact of prompt engineering on structured sentiment extraction performance, specifically testing whether a strict, concise instruction would yield fewer hallucinations and higher format adherence than a verbose, step-by-step instruction.
+
+\subsubsection{Experiment 3: Hyperparameter Optimization}
+
+The third experiment focused on improving model performance through hyperparameter tuning. Different training settings were modified during experimentation to observe how they influence output quality and training stability. The parameters explored in this experiment included:
+\begin{itemize}
+    \item Learning rate,
+    \item Batch size,
+    \item LoRA rank,
+    \item Number of training epochs,
+    \item Maximum sequence length.
+\end{itemize}
+
+The purpose of this experiment was to analyze the effect of training configurations on quadruplet extraction performance and the overall consistency of generated outputs.
+
+\subsubsection{Evaluation Metrics for Subtasks 2 and 3}
+
+Subtask 2 (DimASTE) and Subtask 3 (DimASQP) involve both structured extraction and continuous sentiment prediction. Unlike traditional ABSA tasks, the outputs here contain not only categorical information such as Aspect (A), Category (C), and Opinion (O), but also continuous Valence–Arousal (VA) scores.
+
+In standard ABSA evaluation, Precision, Recall, and F1-score are calculated based on exact matches between predicted and gold annotations. A prediction is counted as correct only when all categorical elements match perfectly. However, this type of evaluation does not consider how close the predicted VA values are to the actual emotional scores.
+
+To solve this problem, the SemEval-2026 shared task introduced the \textbf{continuous True Positive (cTP)} metric. This metric extends the traditional true positive by applying a penalty based on the distance between predicted and gold VA values.
+
+Let $P$ represent the set of predicted triplets or quadruplets. For a prediction $t \in P$, the continuous true positive is defined as:
+
+\begin{equation}
+cTP(t)=
+\begin{cases}
+1 - dist(VA_p(t), VA_g(t)), & t \in P_{cat} \\
+0, & \text{otherwise}
+\end{cases}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $P_{cat} \subseteq P$ denotes the set of predictions whose categorical components exactly match the gold labels,
+    \item $VA_p(t)$ represents the predicted valence–arousal pair,
+    \item $VA_g(t)$ represents the corresponding ground-truth valence–arousal pair.
+\end{itemize}
+
+The distance between the predicted and gold VA scores is calculated using normalized Euclidean distance:
+
+\begin{equation}
+dist(VA_p, VA_g) = \frac{\sqrt{(V_p - V_g)^2 + (A_p - A_g)^2}}{D_{max}}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $V_p$ and $A_p$ are the predicted valence and arousal values,
+    \item $V_g$ and $A_g$ are the gold valence and arousal values,
+    \item $D_{max} = \sqrt{8^2 + 8^2} = \sqrt{128} \approx 11.31$ is the maximum possible Euclidean distance in the VA space on the $[1,9]$ scale.
+\end{itemize}
+
+This normalization ensures that the distance value always remains within the range:
+
+\begin{equation}
+dist(\cdot) \in [0,1]
+\end{equation}
+
+Using the continuous true positive score, the \textbf{continuous Recall (cRecall)} is computed as:
+
+\begin{equation}
+cRecall =
+\frac{
+TP_{cat} -
+\sum_{t \in P_{cat}}
+dist(VA_p(t), VA_g(t))
+}{
+TP_{cat} + FN_{cat}
+}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $TP_{cat}$ is the number of categorically correct predictions,
+    \item $FN_{cat}$ represents the number of gold annotations that were not matched correctly.
+\end{itemize}
+
+Similarly, the \textbf{continuous Precision (cPrecision)} is defined as:
+
+\begin{equation}
+cPrecision =
+\frac{
+TP_{cat} -
+\sum_{t \in P_{cat}}
+dist(VA_p(t), VA_g(t))
+}{
+TP_{cat} + FP_{cat}
+}
+\end{equation}
+
+where $FP_{cat}$ denotes the number of predicted tuples that do not have a correct categorical match.
+
+Finally, the official evaluation metric for Subtasks 2 and 3 is the \textbf{continuous F1-score (cF1)}, defined as the harmonic mean of cRecall and cPrecision:
+
+\begin{equation}
+cF1 =
+\frac{
+2 \times cRecall \times cPrecision
+}{
+cRecall + cPrecision
+}
+\end{equation}
+
+This metric provides a unified evaluation framework that jointly measures:
+\begin{itemize}
+    \item correctness of categorical extraction,
+    \item quality of aspect and opinion identification,
+    \item category classification accuracy,
+    \item precision of continuous valence–arousal prediction.
+\end{itemize}
+
+Compared to traditional binary F1 metrics, cF1 offers a more realistic assessment of DimABSA systems by considering both structured extraction quality and continuous sentiment prediction performance simultaneously.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Subtask 1 Result}
+
+To evaluate the performance of different transformer-based models for Subtask 1 (Dimensional Aspect Sentiment Regression), multiple pretrained architectures were fine-tuned and compared using Mean Squared Error (MSE) on the validation set.
+
+\begin{table}[htbp]
+\centering
+\caption{Performance comparison of different models on the validation set (lower MSE indicates better performance).}
+\label{tab:model_leaderboard}
+\begin{tabular}{lc}
+\hline
+\textbf{Model} & \textbf{Best Validation Loss (MSE)} \\
+\hline
+\textbf{RoBERTa-large} & \textbf{0.7181} \\
+BERT-base-uncased & 0.9016 \\
+BERT-base-cased & 0.9147 \\
+RoBERTa-base & 1.0214 \\
+DeBERTa-v3-base & 1.0359 \\
+\hline
+\end{tabular}
+\end{table}
+
+The results clearly show that \textbf{RoBERTa-large achieves the lowest validation loss}, significantly outperforming other models. This demonstrates its superior ability to capture contextual information and model continuous sentiment representations effectively.
+
+The final RoBERTa-large model was used to generate predictions, which were submitted to the official SemEval-2026 evaluation platform. The performance was evaluated using RMSE on the valence-arousal predictions.
+
+\begin{table}[htbp]
+\centering
+\caption{Official evaluation results for Subtask 1 (DimASR). Lower RMSE indicates better performance.}
+\label{tab:official_results}
+\begin{tabular}{lccc}
+\hline
+\textbf{Domain} & \textbf{RMSE\_VA} & \textbf{PCC\_V} & \textbf{PCC\_A} \\
+\hline
+Laptop (ENG) & 1.3283 & 0.8513 & 0.5255 \\
+Restaurant (ENG) & 1.2324 & 0.8839 & 0.6094 \\
+\hline
+\textbf{Average (ENG)} & \textbf{1.2803} & \textbf{0.8676} & \textbf{0.5675} \\
+\hline
+\end{tabular}
+\end{table}
+
+In terms of leaderboard performance, the proposed system achieved a ranking of \textbf{10th position} in the \textbf{laptop domain} and \textbf{11th position} in the \textbf{restaurant domain}. These results demonstrate the competitiveness of the proposed approach in a large-scale shared task setting.
+
+\subsection{Subtask 2 Results}
+
+The proposed approaches for Subtask 2 were evaluated using the official continuous F1 (cF1) metric provided by the SemEval-2026 shared task. The final predictions were submitted to the official Codabench evaluation platform for both the English laptop and restaurant domains.
+
+\begin{table}[htbp]
+\centering
+\caption{Official evaluation results for Subtask 2 (DimASTE). Higher cF1 indicates better performance.}
+\label{tab:subtask2_results}
+\begin{tabular}{lcccc}
+\hline
+\textbf{Domain} & \textbf{cF1} & \textbf{cPrecision} & \textbf{cRecall} & \textbf{cTP} \\
+\hline
+Laptop (ENG) & 0.4763 & 0.5215 & 0.4383 & 865.1197 \\
+Restaurant (ENG) & 0.5650 & 0.5725 & 0.5577 & 1187.4072 \\
+\hline
+\textbf{Average (ENG)} & \textbf{0.5206} & \textbf{0.5470} & \textbf{0.4980} & \textbf{1026.2634} \\
+\hline
+\end{tabular}
+\end{table}
+
+To further analyze the effectiveness of the proposed architectures for Subtask 2, a comparative evaluation was conducted between the fully generative \textbf{Llama-only} approach and the proposed \textbf{Hybrid (Llama + RoBERTa)} framework.
+
+\begin{table}[htbp]
+\centering
+\caption{Comparison between Llama-only and Hybrid approaches for Subtask 2.}
+\label{tab:hybrid_comparison}
+\begin{tabular}{llccc}
+\hline
+\textbf{Domain} & \textbf{Method} & \textbf{cPrecision} & \textbf{cRecall} & \textbf{cF1} \\
+\hline
+\multirow{2}{*}{Laptop}
+& Llama-Only & 0.5044 & 0.4439 & \textbf{0.4722} \\
+& Hybrid (RoBERTa) & 0.5015 & 0.4412 & 0.4694 \\
+\hline
+\multirow{2}{*}{Restaurant}
+& Llama-Only & 0.6039 & 0.5821 & \textbf{0.5928} \\
+& Hybrid (RoBERTa) & 0.5946 & 0.5731 & 0.5836 \\
+\hline
+\end{tabular}
+\end{table}
+
+The comparative results indicate that the fully generative Llama-only approach slightly outperformed the hybrid framework across both domains. In terms of leaderboard rankings, the proposed system achieved \textbf{18th position} in the \textbf{laptop domain} and \textbf{16th position} in the \textbf{restaurant domain}, demonstrating competitive performance in the official SemEval-2026 shared task evaluation.
+
+Although the hybrid approach was designed to leverage the strong regression capabilities of RoBERTa for VA prediction, the experimental results suggest that replacing Llama-generated VA values with RoBERTa predictions did not lead to performance improvements. One possible reason for this behaviour is that the end-to-end Llama framework learns the relationship between aspect terms, opinion expressions, and VA scores simultaneously during generation. In contrast, dividing the task into separate extraction and regression stages may reduce coordination between components and lead to less consistent final predictions.
+
+Although the hybrid framework did not outperform the fully generative approach, it still produced competitive results and offered useful insights into combining generative LLMs with transformer-based regression models for Dimensional Aspect-Based Sentiment Analysis. The experiments also suggest that maintaining contextual relationships between different sentiment components plays an important role in structured sentiment generation tasks.
+
+\subsection{Subtask 3 Results}
+
+The baseline system developed for Subtask 3 (DimASQP) was evaluated using the official continuous F1 (cF1) metric defined by the SemEval-2026 shared task. Predictions generated using the \textbf{Llama-3.1-8B-Instruct} model were submitted to the official Codabench evaluation platform for the English laptop dataset.
+
+\begin{table}[htbp]
+\centering
+\caption{Official evaluation results for Subtask 3 (DimASQP). Higher cF1 indicates better performance.}
+\label{tab:subtask3_results}
+\begin{tabular}{lcccc}
+\hline
+\textbf{Domain} & \textbf{cF1} & \textbf{cPrecision} & \textbf{cRecall} & \textbf{cTP} \\
+\hline
+Laptop (ENG) & 0.3072 & 0.3740 & 0.2606 & 514.6865 \\
+\hline
+\textbf{Average (ENG)} & \textbf{0.3072} & \textbf{0.3740} & \textbf{0.2606} & \textbf{514.6865} \\
+\hline
+\end{tabular}
+\end{table}
+
+
+To evaluate the impact of prompt engineering and hyperparameter optimization on quadruplet extraction performance, all three experiments conducted for Subtask 3 were compared using the official evaluation metrics.
+
+\begin{table}[htbp]
+\centering
+\caption{Comparison of different experiments for Subtask 3 (Laptop Domain).}
+\label{tab:subtask3_experiments}
+\begin{tabular}{lcccc}
+\hline
+\textbf{Experiment} & \textbf{Actual F1} & \textbf{cF1} & \textbf{cPrecision} & \textbf{cRecall} \\
+\hline
+Exp 1: Baseline & 0.3131 & 0.2917 & 0.3511 & 0.2496 \\
+Exp 2: Prompt Change & 0.2951 & 0.2749 & 0.3372 & 0.2321 \\
+Exp 3: Hyperparameter Optimization & \textbf{0.3302} & \textbf{0.3076} & \textbf{0.3664} & \textbf{0.2651} \\
+\hline
+\end{tabular}
+\end{table}
+
+The comparative results demonstrate that \textbf{Experiment 3}, which focused on hyperparameter optimization, achieved the best overall performance across all evaluation metrics. Furthermore, the final submission based on Experiment 3 achieved \textbf{7th rank} in the official SemEval-2026 Subtask 3 leaderboard for the laptop domain, demonstrating the effectiveness and competitiveness of the proposed optimization strategy in a large-scale shared task setting.
+
+The baseline experiment established a strong initial performance by using a detailed instruction-based prompt with reasoning steps and few-shot examples. However, the second experiment, which simplified the prompt structure, resulted in a performance decrease. This suggests that reducing contextual guidance and example-based instructions may negatively affect the model’s ability to generate accurate and consistent quadruplets.
+
+In contrast, hyperparameter optimization in Experiment 3 significantly improved model performance. Adjustments to training configurations such as learning rate, batch size, sequence length, LoRA parameters, and training epochs contributed to better extraction consistency and improved continuous sentiment prediction.
+
+These findings indicate that, for complex structured generation tasks such as DimASQP, training configuration and optimization strategies may have a greater impact on performance than prompt simplification alone. Furthermore, the experiments highlight the importance of balancing prompt design, model capacity, and fine-tuning strategies when working with instruction-tuned Large Language Models for dimensional sentiment analysis.
+
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This thesis explored Dimensional Aspect-Based Sentiment Analysis (DimABSA) through participation in the SemEval-2026 shared task. Unlike traditional sentiment analysis approaches that rely on discrete sentiment categories, DimABSA aims to capture fine-grained emotional information by combining structured sentiment extraction with continuous valence–arousal (VA) prediction.
+
+Three subtasks were investigated in this work, including dimensional sentiment regression (Subtask 1), triplet extraction (Subtask 2), and quadruplet extraction (Subtask 3). Different transformer-based and Large Language Model (LLM)-based approaches were explored to address the challenges associated with each task.
+
+For Subtask 1, several pretrained transformer encoder models were tested for continuous sentiment prediction. Among all evaluated models, \textbf{RoBERTa-large} produced the most consistent and accurate results on both the restaurant and laptop datasets. The final submissions achieved competitive positions on the official leaderboard, including \textbf{10th rank} for the laptop domain and \textbf{11th rank} for the restaurant domain. These results demonstrate the effectiveness of transformer-based models for valence–arousal regression tasks.
+
+For Subtask 2, two different modelling strategies were explored. The first approach used an end-to-end Llama-based generation framework, while the second approach combined Llama for textual extraction with RoBERTa for VA score prediction. Experimental comparisons showed that the fully generative framework performed slightly better than the hybrid setup. This indicates that jointly generating extraction outputs and sentiment scores may help preserve contextual relationships between different components of the triplet structure. In the official evaluation, the proposed system achieved \textbf{18th position} for the laptop domain and \textbf{16th position} for the restaurant domain.
+
+For Subtask 3, instruction-tuned Large Language Models were used for direct quadruplet extraction. Several experiments were conducted to study the effect of prompt design and training hyperparameters on model performance. The results showed that hyperparameter optimization had a significant impact on performance and ultimately produced the best system configuration. The final submission achieved \textbf{7th rank} on the official leaderboard for the laptop domain, demonstrating the strong potential of LLM-based approaches for complex structured sentiment extraction tasks.
+
+Overall, the findings of this thesis demonstrate that transformer-based architectures and instruction-tuned LLMs provide effective solutions for DimABSA tasks. The experiments further highlight the importance of prompt design, parameter-efficient fine-tuning, contextual dependency modeling, and hyperparameter optimization in improving structured sentiment extraction performance.
+
+Despite these promising results, several challenges remain open for future research. Most notably, since the hybrid approach in Subtask 2 failed to improve upon the end-to-end generative pipeline, future work should investigate whether shared intermediate representations—rather than strictly separated extraction and regression stages—can better preserve contextual dependencies while improving numerical accuracy. Furthermore, while hyperparameter optimization successfully mitigated hallucinated formatting in Subtask 3, generative LLMs still occasionally struggle to adhere to strict categorical schemas. To address this, future research could explore constrained decoding techniques, or apply reinforcement learning strategies that directly optimize for the continuous F1 (cF1) metric rather than standard cross-entropy loss. Finally, extending these optimized architectures to multilingual and cross-domain settings remains an important step toward building universal dimensional sentiment systems.
+
+\section*{Data and Code Availability}
+\addcontentsline{toc}{section}{Data and Code Availability}
+
+To support reproducibility, all implementation code, fine-tuning scripts, prompt templates, and experimental notebooks developed across all three subtasks are publicly available in the project's GitHub repository at: \url{https://github.com/amitraj8/Dimensional-Aspect-Based-Sentiment-Analysis-DimABSA}
+
+\addcontentsline{toc}{section}{References}
+\bibliographystyle{plainurl} 
+\bibliography{references}
+\end{document}
